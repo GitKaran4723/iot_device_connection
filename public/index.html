@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0"
+  >
+
+  <title>ESP32-S3 Sensor Dashboard</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 24px;
+      font-family: Arial, sans-serif;
+      background: #f3f4f6;
+      color: #111827;
+    }
+
+    .dashboard {
+      max-width: 1200px;
+      margin: auto;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 15px;
+      margin-bottom: 24px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 28px;
+    }
+
+    .connection {
+      padding: 8px 14px;
+      border-radius: 20px;
+      font-weight: bold;
+      background: #fef3c7;
+      color: #92400e;
+    }
+
+    .connection.connected {
+      background: #dcfce7;
+      color: #166534;
+    }
+
+    .connection.disconnected {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns:
+        repeat(auto-fit, minmax(180px, 1fr));
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .card {
+      background: white;
+      padding: 20px;
+      border-radius: 12px;
+      box-shadow: 0 2px 8px rgb(0 0 0 / 8%);
+    }
+
+    .card-label {
+      color: #6b7280;
+      font-size: 14px;
+      margin-bottom: 8px;
+    }
+
+    .card-value {
+      font-size: 27px;
+      font-weight: bold;
+    }
+
+    .small-value {
+      font-size: 17px;
+      overflow-wrap: anywhere;
+    }
+
+    .chart-card,
+    .table-card {
+      background: white;
+      padding: 20px;
+      border-radius: 12px;
+      box-shadow: 0 2px 8px rgb(0 0 0 / 8%);
+      margin-bottom: 20px;
+    }
+
+    .chart-container {
+      position: relative;
+      height: 430px;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 5px 10px;
+      border-radius: 15px;
+      font-size: 13px;
+      font-weight: bold;
+    }
+
+    .badge.real {
+      color: #166534;
+      background: #dcfce7;
+    }
+
+    .badge.simulated {
+      color: #92400e;
+      background: #fef3c7;
+    }
+
+    .table-wrapper {
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    th,
+    td {
+      padding: 11px;
+      text-align: left;
+      border-bottom: 1px solid #e5e7eb;
+      white-space: nowrap;
+    }
+
+    th {
+      color: #374151;
+      background: #f9fafb;
+    }
+
+    @media (max-width: 600px) {
+      body {
+        padding: 12px;
+      }
+
+      header {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .chart-container {
+        height: 350px;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <main class="dashboard">
+    <header>
+      <div>
+        <h1>ESP32-S3 Sensor Dashboard</h1>
+        <p>Fenugreek microgreens monitoring</p>
+      </div>
+
+      <div
+        id="connectionStatus"
+        class="connection"
+      >
+        Connecting…
+      </div>
+    </header>
+
+    <section class="cards">
+      <div class="card">
+        <div class="card-label">Temperature</div>
+        <div class="card-value" id="temperature">
+          -- °C
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-label">Humidity</div>
+        <div class="card-value" id="humidity">
+          -- %
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-label">Data type</div>
+        <div id="dataType">
+          <span class="badge">Waiting</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-label">Device</div>
+        <div
+          class="card-value small-value"
+          id="deviceId"
+        >
+          --
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-label">Source</div>
+        <div
+          class="card-value small-value"
+          id="source"
+        >
+          --
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-label">Last received</div>
+        <div
+          class="card-value small-value"
+          id="receivedAt"
+        >
+          --
+        </div>
+      </div>
+    </section>
+
+    <section class="chart-card">
+      <h2>Real-time Temperature and Humidity</h2>
+
+      <div class="chart-container">
+        <canvas id="sensorChart"></canvas>
+      </div>
+    </section>
+
+    <section class="table-card">
+      <h2>Recent Readings</h2>
+
+      <div class="table-wrapper">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Time</th>
+              <th>Temperature</th>
+              <th>Humidity</th>
+              <th>Source</th>
+              <th>Type</th>
+            </tr>
+          </thead>
+
+          <tbody id="readingsTable"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const MAX_CHART_POINTS = 60;
+    const MAX_TABLE_ROWS = 10;
+
+    const seenReadingIds = new Set();
+    const recentReadings = [];
+
+    const chart = new Chart(
+      document.getElementById("sensorChart"),
+      {
+        type: "line",
+
+        data: {
+          labels: [],
+
+          datasets: [
+            {
+              label: "Temperature (°C)",
+              data: [],
+              borderColor: "#dc2626",
+              backgroundColor: "rgb(220 38 38 / 15%)",
+              yAxisID: "temperatureAxis",
+              borderWidth: 2,
+              pointRadius: 3,
+              tension: 0.2
+            },
+            {
+              label: "Humidity (%)",
+              data: [],
+              borderColor: "#2563eb",
+              backgroundColor: "rgb(37 99 235 / 15%)",
+              yAxisID: "humidityAxis",
+              borderWidth: 2,
+              pointRadius: 3,
+              tension: 0.2
+            }
+          ]
+        },
+
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+
+          animation: {
+            duration: 250
+          },
+
+          interaction: {
+            mode: "index",
+            intersect: false
+          },
+
+          plugins: {
+            legend: {
+              position: "top"
+            }
+          },
+
+          scales: {
+            x: {
+              title: {
+                display: true,
+                text: "Time"
+              }
+            },
+
+            temperatureAxis: {
+              type: "linear",
+              position: "left",
+              title: {
+                display: true,
+                text: "Temperature (°C)"
+              }
+            },
+
+            humidityAxis: {
+              type: "linear",
+              position: "right",
+              min: 0,
+              max: 100,
+              title: {
+                display: true,
+                text: "Humidity (%)"
+              },
+              grid: {
+                drawOnChartArea: false
+              }
+            }
+          }
+        }
+      }
+    );
+
+    function parseDatabaseTime(value) {
+      if (!value) {
+        return new Date();
+      }
+
+      // SQLite CURRENT_TIMESTAMP is UTC.
+      const isoValue = value.includes("T")
+        ? value
+        : value.replace(" ", "T") + "Z";
+
+      const date = new Date(isoValue);
+
+      return Number.isNaN(date.getTime())
+        ? new Date()
+        : date;
+    }
+
+    function formatTime(value) {
+      return parseDatabaseTime(value).toLocaleTimeString();
+    }
+
+    function formatDateTime(value) {
+      return parseDatabaseTime(value).toLocaleString();
+    }
+
+    function updateCards(reading) {
+      document.getElementById("temperature").textContent =
+        `${Number(reading.air_temperature_c).toFixed(2)} °C`;
+
+      document.getElementById("humidity").textContent =
+        `${Number(reading.air_humidity_percent).toFixed(2)} %`;
+
+      document.getElementById("deviceId").textContent =
+        reading.device_id ?? "--";
+
+      document.getElementById("source").textContent =
+        reading.source ?? "unknown";
+
+      document.getElementById("receivedAt").textContent =
+        formatDateTime(reading.received_at);
+
+      const simulated = Number(reading.simulated) === 1;
+
+      document.getElementById("dataType").innerHTML =
+        simulated
+          ? `<span class="badge simulated">Simulated</span>`
+          : `<span class="badge real">Actual sensor</span>`;
+    }
+
+    function updateChart(reading) {
+      chart.data.labels.push(
+        formatTime(reading.received_at)
+      );
+
+      chart.data.datasets[0].data.push(
+        Number(reading.air_temperature_c)
+      );
+
+      chart.data.datasets[1].data.push(
+        Number(reading.air_humidity_percent)
+      );
+
+      while (
+        chart.data.labels.length > MAX_CHART_POINTS
+      ) {
+        chart.data.labels.shift();
+        chart.data.datasets[0].data.shift();
+        chart.data.datasets[1].data.shift();
+      }
+
+      chart.update("none");
+    }
+
+    function renderTable() {
+      const table = document.getElementById("readingsTable");
+
+      table.replaceChildren();
+
+      for (const reading of recentReadings) {
+        const row = document.createElement("tr");
+
+        const values = [
+          reading.id,
+          formatDateTime(reading.received_at),
+          `${Number(reading.air_temperature_c).toFixed(2)} °C`,
+          `${Number(reading.air_humidity_percent).toFixed(2)} %`,
+          reading.source ?? "unknown",
+          Number(reading.simulated) === 1
+            ? "Simulated"
+            : "Actual"
+        ];
+
+        for (const value of values) {
+          const cell = document.createElement("td");
+          cell.textContent = value;
+          row.appendChild(cell);
+        }
+
+        table.appendChild(row);
+      }
+    }
+
+    function addReading(reading) {
+      if (seenReadingIds.has(reading.id)) {
+        return;
+      }
+
+      seenReadingIds.add(reading.id);
+
+      updateCards(reading);
+      updateChart(reading);
+
+      recentReadings.unshift(reading);
+
+      if (recentReadings.length > MAX_TABLE_ROWS) {
+        recentReadings.pop();
+      }
+
+      renderTable();
+    }
+
+    async function loadHistoricalReadings() {
+      try {
+        const response = await fetch(
+          `/api/readings?limit=${MAX_CHART_POINTS}`
+        );
+
+        if (!response.ok) {
+          throw new Error(
+            `History request failed: ${response.status}`
+          );
+        }
+
+        const readings = await response.json();
+
+        // API returns newest first. Reverse for graph order.
+        readings.reverse().forEach(addReading);
+      } catch (error) {
+        console.error(error);
+      }
+    }
+
+    function startLiveStream() {
+      const status =
+        document.getElementById("connectionStatus");
+
+      const events = new EventSource("/api/events");
+
+      events.onopen = () => {
+        status.textContent = "Live";
+        status.className = "connection connected";
+      };
+
+      events.addEventListener("reading", event => {
+        try {
+          const reading = JSON.parse(event.data);
+          addReading(reading);
+        } catch (error) {
+          console.error("Invalid live reading:", error);
+        }
+      });
+
+      events.onerror = () => {
+        status.textContent = "Reconnecting…";
+        status.className = "connection disconnected";
+      };
+    }
+
+    async function initializeDashboard() {
+      await loadHistoricalReadings();
+      startLiveStream();
+    }
+
+    initializeDashboard();
+  </script>
+</body>
+</html>
