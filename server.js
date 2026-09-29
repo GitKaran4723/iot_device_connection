@@ -200,6 +200,8 @@ app.get("/api/readings", (request, response) => {
     LIMIT ?
   `).all(limit);
 
+  console.log(readings)
+
   response.json(readings);
 });
 
